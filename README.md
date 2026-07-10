@@ -1,105 +1,227 @@
-# test-binds
+# Annobind
 
-基于 C++26、nanobind 与自定义 `annobind` 注解系统的 Python 扩展示例工程。
+**基于 C++26 反射与 nanobind 的自动绑定库**
 
-这个项目展示了如何使用 C++ 反射风格注解和 `nanobind`，将复杂的 C++ 类型、模板、命名空间、枚举、类、嵌套类型与线程安全对象绑定到 Python。
+[![C++26](https://img.shields.io/badge/C%2B%2B-26-blue)](https://en.cppreference.com/w/cpp/compiler_support/26)
+[![nanobind](https://img.shields.io/badge/nanobind-latest-green)](https://github.com/wjakob/nanobind)
+[![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-## 核心功能
+`annobind` 借助 C++26 的静态反射（P2996）和 nanobind 实现 **自动导出** C++ 实体（类、命名空间、函数、变量、枚举）到 Python，极大减少手写绑定代码，同时通过 **编译期注解** 提供精细控制。
 
-- 结合 `nanobind` 与 `annobind` 注解，自动化生成 Python 绑定。
-- 演示命名空间绑定、子模块绑定、枚举导出、类绑定、虚函数 trampoline、模板实例绑定。
-- 提供参数重命名、默认值、关键字参数、跳过绑定、导出到主模块等注解控制。
-- 绑定 `Queue<int>` 并通过 `nanobind::gil_scoped_release()` 释放 GIL，用于多线程测试。
-- 自定义 CMake helper 自动生成 `.pyi` 类型存根，提高 Python 编辑器与类型检查体验。
-- 演示重复绑定警告与绑定安全检查。
+---
 
-## 项目结构
+## ✨ 核心特性
 
-- `CMakeLists.txt` - 根工程配置，查找 Python、nanobind，并添加子项目。
-- `annobind/` - 自定义绑定库，通过注解读取和反射式绑定实现 Python 导出。
-- `test/ab_test.cpp` - 核心示例模块，实现了 `MyClass`、枚举、函数、模板绑定、以及 `Queue<int>`。
-- `include/t_queue.hpp` - 线程安全队列实现，`pop()` 释放 GIL。
-- `cmake/NanobindCustomBuild.cmake` - 自定义 CMake 函数，生成 `.pyi` stub 并复制输出。
-- `test.py` - Python 端调用示例。
-- `test_gil.py` - GIL 释放与多线程行为测试。
+- **零胶水代码**：一条 `annobind::bind_to_module<^^MyNamespace>(m)` 即可导出整个命名空间。
+- **丰富的注解系统**（`ab::` 前缀）：控制导出、命名、文档、参数默认值、参数标志等。
+- **原生 nanobind 支持**：无缝集成 `nb::call_guard`, `nb::keep_alive`, `nb::rv_policy` 等。
+- **模板实例化支持**：通过 `ab::bind{^^f<int>}` 显式绑定模板实体。
+- **重复绑定检测**：可选 `reg_guard` 在调试时警告重复导出。
+- **完全编译期**：所有反射与注解处理均在编译期完成，运行时零开销。
 
-## 依赖
+---
 
-- CMake >= 3.20
-- Python >= 3.12
-- `nanobind`
-- `pybind11`/`pybind11-stubgen`（用于类型存根生成）
-- Windows + MinGW/GCC 环境（示例使用 `E:/w64devkit` 作为编译环境）
+## 📦 快速开始
 
-## 快速开始
+### 1. 环境要求
 
-1. 创建并激活虚拟环境：
+- C++26 编译器（需支持 `-freflection`），如 **GCC 16+**。
+- Python 3.12+。
+- uv（Python 包管理器）。
+- [nanobind](https://github.com/wjakob/nanobind)（已安装 Python 包）。
+- CMake。
 
-```powershell
-.venv\Scripts\python.exe -m venv .venv
-.venv\Scripts\python.exe -m pip install -U pip
+### 2. 将 annobind 加入项目
+
+```cmake
+# 你的 CMakeLists.txt
+add_subdirectory(annobind)  # 将 annobind 源码放在同级目录
+target_link_libraries(your_module PRIVATE annobind)
+# 确保 C++26 与 -freflection 已启用
 ```
 
-2. 安装 Python 依赖：
+### 3. 编写绑定
 
-```powershell
-.venv\Scripts\python.exe -m pip install nanobind pybind11 pybind11-stubgen
+```cpp
+#include <annobind.hpp>
+#include <nanobind/nanobind.h>
+
+namespace ab = annobind;
+namespace nb = nanobind;
+
+// 要导出的 C++ 代码
+namespace demo {
+    int global_var = 42;
+    void hello() { std::println("Hello!"); }
+    struct MyClass { int x; };
+}
+
+NB_MODULE(my_ext, m) {
+    ab::reg_guard rg;  // (可选) 启用重复绑定检查
+    ab::bind_to_module<^^demo>(m);
+}
 ```
 
-3. 使用 CMake 编译项目：
+一行代码自动导出 `demo` 命名空间内的变量、函数、类型（及其成员）到 Python。
 
-```powershell
-cmake -S . -B build
-cmake --build build --config Release
+---
+
+## 🧩 核心接口
+
+| 接口 | 说明 |
+|------|------|
+| `bind_to_module<^^ns>(nb_module, base_opt)` | 将命名空间 `ns` 的成员绑定到 `nb_module`（子成员可递归绑定） |
+| `bind_submodule<^^ns>(nb_module, base_opt)` | 将 `ns` 创建为 `nb_module` 的子模块，并绑定其成员 |
+| `bind_class<^^T>(scope, base_opt)` | 将类 `T` 绑定到 `scope`（模块或类） |
+| `bind_enum<^^E>(scope)` | 绑定枚举 |
+| `bind_function<^^func>(module)` | 绑定单个函数 |
+| `bind_module_member<^^member>(module, base_opt)` | 绑定命名空间成员（可跨命名空间） |
+| `bind_class_member<^^member>(class_obj, base_opt)` | 绑定类成员 |
+| `bind_bind<^^ab::bind{...}>(scope, base)` | 处理显式 `ab::bind` 声明 |
+
+所有 `*_opt` 参数均为 `std::optional`，表示“根作用域”（用于 `plain` 标注）。
+
+---
+
+## 🏷️ 注解系统 (Attributes)
+
+注解使用 C++26 语法：`[[= ab::annotation(...)]]`。
+
+### 通用注解
+
+| 注解 | 含义 |
+|------|------|
+| `skip` | 跳过该实体（优先级高于 `unskip`） |
+| `unskip` | 强制导出（即使所在作用域被 `skip`） |
+| `with_src` | 在文档中添加源码位置 |
+| `doc("...")` | 自定义文档字符串（不同来源的会进行拼接） |
+| `rename("...")` | 自定义 Python 名称 |
+| `plain` | 将嵌套类型/命名空间提升到根作用域（忽略嵌套层级） |
+
+### 函数/方法注解
+
+| 注解 | 含义 |
+|------|------|
+| `auto_param_name` | 自动为参数生成名称（默认启用） |
+| `arg(index/name).rename("x")` | 指定参数名 |
+| `arg(index/name).none()` / `.noconvert()` / `.lock()` | 对应 `nb::arg` 标志 |
+| `arg(index/name).kw_only()` | 该参数变为仅关键字参数 |
+| `arg(index/name).defaul_(value)` 或 `arg(index/name) = value` | 设置默认值（值需编译期常量） |
+| `arg()....` | 直接在参数注解中中使用以上接口 |
+
+### 类/命名空间注解
+
+| 注解 | 含义 |
+|------|------|
+| `with_func_src` | 为所有成员函数附加源码位置 |
+| `with_data_src` | 为所有数据成员附加源码位置 |
+| `with_nested_src` | 为嵌套类型附加源码位置 |
+| `skip_func` / `skip_data` / `skip_nested` | 跳过对应类别 |
+| `trampo{^^PyT}` | 指定跳板类（`nb::class_` 的 trampoline） |
+| `export_values` | 枚举：导出枚举值到父作用域（同 `enum_.export_values()`） |
+| `plain` | 将嵌套类型绑定到到根作用域, 将命名空间成员绑定到根作用域 |
+
+### 显式绑定声明
+
+```cpp
+static constexpr auto my_bind = ab::bind{^^some_template<int>};
 ```
 
-> `cmake/NanobindCustomBuild.cmake` 中的 `nanobind_custom_build()` 会自动调用 `nanobind.stubgen` 生成 `.pyi` 文件，并将扩展与 stub 拷贝到 `bin/` 目录。
+该声明会触发 `some_template<int>` 的实例化, 并在被自动遍历到时将其绑定到当前作用域, 请不要在类中绑定非成员函数/变量。其上的 `ab::arg` 等注解会覆盖实体本身的注解。
 
-## 运行示例
+---
 
-在项目根目录中运行：
+## ⚙️ 全局配置宏
 
-```powershell
-.venv\Scripts\python.exe test.py
+在编译时通过宏控制默认行为（可在 `CMakeLists.txt` 中定义）：
+
+```cpp
+#define AB_AUTO_MODULE_SRC         false   // 模块附加源码
+#define AB_AUTO_TYPE_SRC           false   // 类型附加源码
+#define AB_AUTO_FUNC_SRC           false   // 函数附加源码
+#define AB_AUTO_DATA_MEMBER_SRC    false   // 数据成员附加源码
+#define AB_AUTO_PARAM_NAME         true    // 自动生成参数名
+#define AB_AUTO_EXPORT_ENUM        false   // 自动 export_values
+#define AB_AUTO_SKIP_NESTED        false   // 默认跳过嵌套类型
+#define AB_AUTO_SKIP_FUNC          false   // 默认跳过函数
+#define AB_AUTO_SKIP_DATA          false   // 默认跳过数据成员
+#define AB_AUTO_PLAIN_MODULE       false   // 默认 plain 到模块
+#define AB_AUTO_PLAIN_NEST_CLASS   false   // 默认 plain 到类
 ```
 
-`test.py` 示例包含：
+---
 
-- 调用 `ab_test.f_int(2)`。
-- 创建 `ab_test.MyClass` 并调用 `greet()`。
-- 使用 `ab_test.IntArray10()` 填充数组并访问元素。
+## 🧪 测试示例
 
-## GIL 释放测试
+项目自带的 `test/ab_test.cpp` 展示了所有功能，包括：
 
-运行：
+- 类（含虚拟函数、跳板类）
+- 静态/常量成员
+- 模板函数与模板类的显式实例化
+- 嵌套命名空间与 `plain` 提升
+- 枚举 `export_values`
+- `skip`/`unskip` 控制
+- 命名空间别名绑定（需谨慎）
 
-```powershell
-.venv\Scripts\python.exe test_gil.py
+运行测试后，生成的 `ab_test.pyi` 存根文件可验证导出结果。
+
+---
+
+## ⚠️ 注意事项
+
+1. **模板实例化**：普通模板不会自动实例化，必须通过 `ab::bind{^^T<Args>}` 手动绑定。
+2. **类型别名**：`using` 声明无法携带注解，因此不会被自动绑定；`typedef` 可携带注解（需 `unskip` 才会自动被绑定）。
+3. **命名空间别名**：绑定别名会创建一个新的子模块，其内容与原命名空间相同（重复），可能导致混淆，应尽量避免。
+4. **递归绑定**：如命名空间/类中通过 `ab::bind` 循环绑定。栈溢出警告。
+5. **`reg_guard`**：建议在调试阶段使用，它会启用 `ABRegistry` 以检测重复绑定模块、类（枚举）的重复绑定；生产环境可移除（或条件编译）。
+6. **特殊成员**：复制/移动构造函数、赋值运算符、析构函数会被自动排除, 但可用的默认构造函数、用户声明的函数则不会。
+
+---
+
+## 🛠️ 构建与集成
+
+### 样例工程
+
+本项目本身是一份采用 **CMake** 构建的**完整样例工程**，包含：
+- `annobind` 接口库（`./annobind/`）
+- 测试绑定模块（`./test`）
+- CMake 辅助脚本（`./cmake/NanobindCustomBuild.cmake`）
+- 包管理配置（`./pyproject.toml`）
+
+所有功能均已集成，可直接编译、运行，验证注解系统与自动绑定效果。
+
+### 构建样例
+
+在项目根目录执行：
+```bash
+uv sync
+cmake -DCMAKE_BUILD_TYPE:STRING=RelWithDebInfo  -DCMAKE_C_COMPILER:FILEPATH=path/to/gcc -DCMAKE_CXX_COMPILER:FILEPATH=path/to/g++ -B ./build
+cmake --build ./build --config RelWithDebInfo --target install --
 ```
+这将直接编译测试样例，生成python二进制拓展与存根文件，并安装到 `./bin/` 目录下。
 
-`test_gil.py` 示例说明：
+### 将 annobind 集成到你的项目
 
-- `Queue<int>::pop()` 使用 `nanobind::gil_scoped_release()` 释放 Python GIL。
-- 后台线程在 `pop()` 阻塞期间继续运行，用于验证 C++ 扩展是否支持并发。
+将 `annobind` 接口库放入你的项目，然后在顶层 `CMakeLists.txt` 中添加：
+```cmake
+add_subdirectory(annobind)
+target_link_libraries(your_module PRIVATE annobind)
+```
+并确保你的 `your_module` 已启用 C++26 与 `-freflection`。
 
-## 亮点展示
+当然，`annobind`是纯头文件库，你可以直接将其添加到目标的头文件搜索路径中。
 
-- `annobind` 注解极大简化了绑定代码，避免手写大量 `nanobind` 绑定逻辑。
-- 支持直接绑定模板实例，如 `ab::bind{^^templateMethod<int>}` 和 `ab::bind(^^std::array<int, 10>)`。
-- 支持嵌套命名空间绑定、`plain` 注解导出到主模块、`skip` 注解跳过绑定项。
-- 绑定类的 trampoline 机制支持虚函数重写。
-- 提供类型存根文件，提升 Python 编辑器补全与类型检查效果。
+## 📄 许可证
 
-## 目录说明
+MIT License. 详情见 [LICENSE](LICENSE)。
 
-- `annobind/include/annobind` - `annobind` 头文件实现。
-- `bin/ab_test` - 编译后生成的 Python 扩展包和 `.pyi` 存根。
-- `test` - C++ 扩展源代码与 CMake 构建配置。
-- `test.py` - Python 调试与功能演示脚本。
-- `test_gil.py` - GIL 释放与多线程测试脚本。
+---
 
-## 扩展方向
+## 🙏 致谢
 
-- 增加更多注解示例（文档注释、导出值、skip_data、plain 等）。
-- 支持更多 STL 与自定义泛型类型的自动绑定。
-- 将 `annobind` 封装成独立可复用的 C++ 绑定库。
+- [nanobind](https://github.com/wjakob/nanobind) 提供轻量级 Python 绑定。
+- C++26 反射提案 [P2996](https://wg21.link/p2996) 的实现者（GCC/Clang）。
+
+---
+
+**Happy auto-binding!** 🚀

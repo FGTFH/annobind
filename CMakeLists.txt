@@ -5,12 +5,11 @@ set(CMAKE_CXX_STANDARD 26)
 set(CMAKE_CXX_STANDARD_REQUIRED TRUE)
 set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+add_compile_options(-freflection)
 
-add_compile_options(
-    -freflection
-)
-
-link_libraries(E:/w64devkit/lib/gcc/x86_64-w64-mingw32/16.1.0/libstdc++exp.a)
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    link_libraries(stdc++exp)
+endif()
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 include(NanobindCustomBuild)

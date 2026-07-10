@@ -67,7 +67,7 @@ class[[= ab::trampo{^^PyMyClass}]] MyClass {
     template <typename T>
     class InnerTClass {
        public:
-        int y = 10;
+        int y = 9;
         void show(T x) const { std::println("InnerTClass y={}", y); }
     };
     static constexpr auto templateInnerClassInt = ab::bind{^^InnerTClass<int>};

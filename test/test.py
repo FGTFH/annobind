@@ -1,3 +1,8 @@
+import os
+import sys
+
+sys.path.append(os.getcwd())
+
 import bin.ab_test.inner as inner
 from bin import ab_test
 
