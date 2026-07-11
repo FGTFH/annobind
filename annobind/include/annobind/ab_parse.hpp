@@ -1,6 +1,7 @@
 #pragma once
 #include <nanobind/nanobind.h>
 
+#include <algorithm>
 #include <cstddef>
 #include <cstring>
 #include <meta>
@@ -18,50 +19,54 @@ namespace nb = nanobind;
 namespace meta = std::meta;
 namespace detail {
 // ==================== 常量映射表 ====================
-static constexpr auto operator_to_magics = std::array<std::pair<meta::operators, const char*>, 30>{{
+static constexpr auto op2magic = [] {
+    auto arr = std::array<std::pair<meta::operators, const char*>, 30>{{
 
-    // 一元运算符 & 特殊
-    {meta::operators::op_parentheses, "__call__"},         // ()
-    {meta::operators::op_square_brackets, "__getitem__"},  // []
-    {meta::operators::op_tilde, "__invert__"},             // ~
-    {meta::operators::op_exclamation, "__not__"},          // ! -> not
+        // 一元运算符 & 特殊
+        {meta::operators::op_parentheses, "__call__"},         // ()
+        {meta::operators::op_square_brackets, "__getitem__"},  // []
+        {meta::operators::op_tilde, "__invert__"},             // ~
+        {meta::operators::op_exclamation, "__not__"},          // ! -> not
 
-    // 算术运算符
-    {meta::operators::op_plus, "__add__"},                // +
-    {meta::operators::op_minus, "__sub__"},               // -
-    {meta::operators::op_star, "__mul__"},                // *
-    {meta::operators::op_slash, "__truediv__"},           // /
-    {meta::operators::op_percent, "__mod__"},             // %
-    {meta::operators::op_caret, "__xor__"},               // ^
-    {meta::operators::op_ampersand, "__and__"},           // & -> and
-    {meta::operators::op_pipe, "__or__"},                 // | -> or
-    {meta::operators::op_less_less, "__lshift__"},        // <<
-    {meta::operators::op_greater_greater, "__rshift__"},  // >>
+        // 算术运算符
+        {meta::operators::op_plus, "__add__"},                // +
+        {meta::operators::op_minus, "__sub__"},               // -
+        {meta::operators::op_star, "__mul__"},                // *
+        {meta::operators::op_slash, "__truediv__"},           // /
+        {meta::operators::op_percent, "__mod__"},             // %
+        {meta::operators::op_caret, "__xor__"},               // ^
+        {meta::operators::op_ampersand, "__and__"},           // & -> and
+        {meta::operators::op_pipe, "__or__"},                 // | -> or
+        {meta::operators::op_less_less, "__lshift__"},        // <<
+        {meta::operators::op_greater_greater, "__rshift__"},  // >>
 
-    // 复合赋值运算符
-    {meta::operators::op_plus_equals, "__iadd__"},                // +=
-    {meta::operators::op_minus_equals, "__isub__"},               // -=
-    {meta::operators::op_star_equals, "__imul__"},                // *=
-    {meta::operators::op_slash_equals, "__itruediv__"},           // /=
-    {meta::operators::op_percent_equals, "__imod__"},             // %=
-    {meta::operators::op_caret_equals, "__ixor__"},               // ^=
-    {meta::operators::op_ampersand_equals, "__iand__"},           // &=
-    {meta::operators::op_pipe_equals, "__ior__"},                 // |=
-    {meta::operators::op_less_less_equals, "__ilshift__"},        // <<=
-    {meta::operators::op_greater_greater_equals, "__irshift__"},  // >>=
+        // 复合赋值运算符
+        {meta::operators::op_plus_equals, "__iadd__"},                // +=
+        {meta::operators::op_minus_equals, "__isub__"},               // -=
+        {meta::operators::op_star_equals, "__imul__"},                // *=
+        {meta::operators::op_slash_equals, "__itruediv__"},           // /=
+        {meta::operators::op_percent_equals, "__imod__"},             // %=
+        {meta::operators::op_caret_equals, "__ixor__"},               // ^=
+        {meta::operators::op_ampersand_equals, "__iand__"},           // &=
+        {meta::operators::op_pipe_equals, "__ior__"},                 // |=
+        {meta::operators::op_less_less_equals, "__ilshift__"},        // <<=
+        {meta::operators::op_greater_greater_equals, "__irshift__"},  // >>=
 
-    // 比较运算符
-    {meta::operators::op_equals_equals, "__eq__"},       // ==
-    {meta::operators::op_exclamation_equals, "__ne__"},  // !=
-    {meta::operators::op_less, "__lt__"},                // <
-    {meta::operators::op_greater, "__gt__"},             // >
-    {meta::operators::op_less_equals, "__le__"},         // <=
-    {meta::operators::op_greater_equals, "__ge__"},      // >=
+        // 比较运算符
+        {meta::operators::op_equals_equals, "__eq__"},       // ==
+        {meta::operators::op_exclamation_equals, "__ne__"},  // !=
+        {meta::operators::op_less, "__lt__"},                // <
+        {meta::operators::op_greater, "__gt__"},             // >
+        {meta::operators::op_less_equals, "__le__"},         // <=
+        {meta::operators::op_greater_equals, "__ge__"},      // >=
 
-    // 注：op_plus_plus, op_minus_minus, op_arrow, op_arrow_star, op_comma,
-    // op_ampersand_ampersand, op_pipe_pipe, op_spaceship, op_new, op_delete 等
-    // 在 Python 中无直接对应，故省略。
-}};
+        // 注：op_plus_plus, op_minus_minus, op_arrow, op_arrow_star, op_comma,
+        // op_ampersand_ampersand, op_pipe_pipe, op_spaceship, op_new, op_delete 等
+        // 在 Python 中无直接对应，故省略。
+    }};
+    std::sort(arr.begin(), arr.end(), [](auto& a, auto& b) { return a.first < b.first; });
+    return arr;
+}();
 
 // ==================== 辅助工具 ====================
 inline constexpr std::string u32_to_str(unsigned int value) {
@@ -102,11 +107,8 @@ consteval const char* name_of() {
     if (meta::has_identifier(obj)) return meta::identifier_of(obj).data();
     if (meta::is_operator_function(obj) && meta::is_class_member(obj)) {
         auto op = meta::operator_of(obj);
-        for (const auto& [op_enum, magic] : detail::operator_to_magics) {
-            if (op_enum == op) {
-                return magic;
-            }
-        }
+        auto it = std::lower_bound(op2magic.begin(), op2magic.end(), op, [](auto& a, auto& b) { return a.first < b; });
+        if (it != op2magic.end()) return it->second;
     }
     return "";
 }
@@ -165,13 +167,8 @@ consteval auto nb_annotations_of() {
         return std::define_static_array(std::views::join(storage));
     }();
 
-    constexpr auto arr = std::define_static_array([&] {
-        std::vector<meta::info> storage{};
-        for (const auto& ann : all_anns) {
-            if (!is_ab_annotation(meta::constant_of(ann))) storage.push_back(ann);
-        }
-        return storage;
-    }());
+    constexpr auto arr =
+        std::define_static_array(all_anns | std::views::filter([](meta::info ann) { return !is_ab_annotation(ann); }));
     return [&]<size_t... I>(std::index_sequence<I...>) {
         return std::tuple([:meta::constant_of(arr[I]):]...);
     }(std::make_index_sequence<arr.size()>{});
@@ -221,7 +218,11 @@ auto parse_func_annotations() {
                                                  : std::string("arg") + u32_to_str(i);
                 param_arg.name_ = std::define_static_string(s);
             }
-
+            auto anns_p =
+                meta::annotations_of(p) | std::views::transform([](const auto& ann) { return meta::constant_of(ann); });
+            auto simp_default_ =
+                std::ranges ::find_if(anns_p, [](auto ann) { return meta::remove_cvref(meta::type_of(ann)) != ^^arg; });
+            if (simp_default_ != anns_p.end()) param_arg.default_ = *simp_default_;
             result.push_back(param_arg);
         }
 
@@ -230,13 +231,10 @@ auto parse_func_annotations() {
             auto arg_obj = meta::extract<arg>(ann);
             auto ind = arg_obj.ind;
             if (!(ind >= 0 && ind < paramN)) {
-                for (int i{}; i < paramN; ++i) {
-                    const auto& p = params[i];
-                    if (meta::has_identifier(p) && meta::identifier_of(p) == arg_obj.cpp_name) {
-                        ind = i;
-                        break;
-                    }
-                }
+                auto it = std::ranges::find_if(params, [&](const auto& p) {
+                    return meta::has_identifier(p) && meta::identifier_of(p) == arg_obj.cpp_name;
+                });
+                if (it != params.end()) ind = std::distance(params.begin(), it);
             }
             if (ind >= 0 && ind < paramN) {
                 if (arg_obj.default_ != meta::info{}) result[ind].default_ = arg_obj.default_;
@@ -277,16 +275,12 @@ auto parse_func_annotations() {
     }(std::make_index_sequence<paramN>{});
 
     // 查找 kw_only 位置
-    static constexpr int kw_ind = [&] {
-        for (int i{}; i < paramN; i++) {
-            if (parsed_args[i].kw_only_) return i;
-        }
-        return -1;
-    }();
+    static constexpr int kw_ind = std::distance(
+        parsed_args.begin(), std::ranges::find_if(parsed_args, [](const auto& arg) { return arg.kw_only_; }));
 
     //  插入 kw_only
     auto final_args = [&]() {
-        if constexpr (kw_ind >= 0 && kw_ind < paramN) {
+        if constexpr (kw_ind < paramN) {
             auto prefix = [&]<size_t... I>(std::index_sequence<I...>) {
                 return std::tuple(std::get<I>(arg_tuple)...);
             }(std::make_index_sequence<kw_ind>{});

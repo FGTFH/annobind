@@ -38,12 +38,16 @@ class[[= ab::trampo{^^PyMyClass}]] MyClass {
     std::string name = "default";
     static constexpr int staticConstexprInt = 42;
     inline static int staticInt = 43;
-    MyClass() = default;
+
     MyClass(int x_, std::string name_) : x(x_), name(name_) {}
+
+    // 自动处理适用于python的运算符(+ -> __add__)
+    MyClass operator+(const MyClass& other) const { return MyClass(x + other.x, name + other.name); }
 
     virtual void greet() const { std::println("Hello, {} (x={})", name, x); }
 
-    [[= ab::arg(0).rename("new_x")]] void setX(int x_) { x = x_; }
+    // 普通成员函数, 参数注解中的第一个非ab::arg标注会被视为默认值
+    [[= ab::arg("x_").rename("new_x")]] void setX([[= 42]] int x_) { x = x_; }
 
     // 静态方法模板
     template <typename T>
@@ -70,9 +74,11 @@ class[[= ab::trampo{^^PyMyClass}]] MyClass {
         int y = 9;
         void show(T x) const { std::println("InnerTClass y={}", y); }
     };
-    static constexpr auto templateInnerClassInt = ab::bind{^^InnerTClass<int>};
+    //
+    static constexpr auto templateInnerClass = ab::bind{^^InnerTClass<int>};
+    [[= ab::plain()]] static constexpr auto templateInnerClassPlain = ab::bind{^^InnerTClass<float>};
     // typedef类型别名可以被绑定
-    typedef InnerTClass<float> defInnerClassDouble[[= ab::unskip()]];
+    typedef InnerTClass<double> templateInnerClassDef[[= ab::unskip()]];
 
     // using声明无法绑定, 因为似乎不能对它们进行标注
     // using usingInnerClassDouble = InnerTClass<double>[[= ab::unskip()]];
@@ -98,6 +104,9 @@ constexpr int constexprGlobal = 46;
 // 命名空间内的函数
 [[= ab::arg(0).rename("a_")]] int add(int a, [[= ab::defaul_(10).kw_only()]] int b) { return a + b; }
 
+// 使用 bind 显式绑定模板实例化,可以跨命名空间
+static constexpr auto f_int = ab::bind{^^f<int>};
+
 // 嵌套命名空间->子模块
 namespace inner {
 [[= ab::doc("Inner function")]] void innerFunc() { std::println("inner"); }
@@ -108,11 +117,11 @@ struct IInnerClass {
     // 将绑定到根模块
     [[= ab::skip()]] struct[[= ab::plain()]] IInnerClass2 {
     } i2;
+
+    // 虽然类可以绑定到任何地方，但不建议也没有必要这样做
+    static constexpr auto templateInnerClassOuter = ab::bind{^^MyClass::InnerTClass<char>};
 };
 }  // namespace inner
-
-// 使用 bind 显式绑定模板实例化,可以跨命名空间
-static constexpr auto f_int = ab::bind{^^f<int>};
 
 // 使用 plain 标注将内层命名空间绑定到根模块
 namespace[[= ab::plain()]] inner2 {

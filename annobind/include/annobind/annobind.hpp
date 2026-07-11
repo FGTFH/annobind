@@ -44,8 +44,7 @@ auto make_nb_class(nb::handle& nb_scope) {
     // 构建 nb::class_ 的模板参数列表
     constexpr auto access_ctx = meta::access_context::current();
     using cls_t = typename[:[&] {
-        std::vector<meta::info> class_list;
-        class_list.push_back(cls);
+        std::vector<meta::info> class_list{cls};
         if constexpr (trampoline != meta::info{}) {
             static_assert(meta::type_of(meta::bases_of(trampoline, access_ctx)[0]) == cls);
             class_list.push_back(trampoline);
