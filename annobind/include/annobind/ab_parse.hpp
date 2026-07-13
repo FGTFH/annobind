@@ -83,40 +83,42 @@ inline constexpr std::string u32_to_str(unsigned int value) {
 
 // ==================== 名称解析 ====================
 // 优先级顺序：
-// 1. bind_h 的 rename 注解
+// 1. bind 的 rename 注解
 // 2. obj 自身的 rename 注解
-// 2. dealias(obj) 自身的 rename 注解
-// 3. bind_h 的 identifier（如果绑定点有名）
-// 4. obj 自身的 identifier
-// 5. 如果是运算符，映射到 Python 魔术方法名
-template <meta::info obj, meta::info bind_h = meta::info{}>
+// 3. dealias(obj) 自身的 rename 注解
+// 4. 如果是运算符，映射到 Python 魔术方法名
+// 5. bind 的 identifier（如果绑定点有名）
+// 6. obj 自身的 identifier
+// 7. dealias(obj) 的 identifier
+template <meta::info obj_b>
 consteval const char* name_of() {
-    if constexpr (bind_h != meta::info{}) {
-        auto ann = meta::annotations_of_with_type(bind_h, ^^rename);
+    constexpr auto obj = take_bind<obj_b>();
+    auto ann = meta::annotations_of_with_type(obj_b, ^^rename);
+    if (ann.size() > 0) return meta::extract<rename>(ann[0]).name;
+    if constexpr (obj != obj_b) {
+        auto ann = meta::annotations_of_with_type(obj, ^^rename);
         if (ann.size() > 0) return meta::extract<rename>(ann[0]).name;
     }
-
-    auto ann = meta::annotations_of_with_type(obj, ^^rename);
-    if (ann.size() > 0) return meta::extract<rename>(ann[0]).name;
-
     if (obj != meta::dealias(obj)) {
         auto ann = meta::annotations_of_with_type(meta::dealias(obj), ^^rename);
         if (ann.size() > 0) return meta::extract<rename>(ann[0]).name;
     }
-    if (meta::has_identifier(bind_h)) return meta::identifier_of(bind_h).data();
-    if (meta::has_identifier(obj)) return meta::identifier_of(obj).data();
     if (meta::is_operator_function(obj) && meta::is_class_member(obj)) {
         auto op = meta::operator_of(obj);
         auto it = std::lower_bound(op2magic.begin(), op2magic.end(), op, [](auto& a, auto& b) { return a.first < b; });
         if (it != op2magic.end()) return it->second;
     }
+    if (meta::has_identifier(obj_b)) return meta::identifier_of(obj_b).data();
+    if (meta::has_identifier(obj)) return meta::identifier_of(obj).data();
+    if (meta::has_identifier(meta::dealias(obj))) return meta::identifier_of(meta::dealias(obj)).data();
+
     return "";
 }
 
 // ==================== 文档字符串 ====================
-template <meta::info obj, bool with_src_h, meta::info bind_h = meta::info{}>
+template <meta::info obj_b, bool with_src_h>
 consteval const char* docstring_of() {
-    constexpr bool with_src_v = check_anno_bool_value_ex<obj, with_src, with_src_h, bind_h>();
+    constexpr bool with_src_v = check_anno_bool_value_ex<obj_b, with_src, with_src_h>();
     std::string doc_;
 
     // 收集 doc 注解（先后顺序：dealias(obj) > obj > bind_h）
@@ -131,9 +133,10 @@ consteval const char* docstring_of() {
         }
     };
 
+    constexpr auto obj = take_bind<obj_b>();
     if constexpr (meta::dealias(obj) != obj) append_doc(meta::dealias(obj));
     append_doc(obj);
-    if constexpr (bind_h != meta::info{}) append_doc(bind_h);
+    if constexpr (obj_b != obj) append_doc(obj_b);
 
     // 附加源码位置（如果需要）
     if constexpr (with_src_v) {
@@ -146,9 +149,9 @@ consteval const char* docstring_of() {
     return std::define_static_string(doc_);
 }
 
-template <meta::info obj, bool with_src_h, meta::info bind_h = meta::info{}>
+template <meta::info obj_b, bool with_src_h>
 consteval auto doctuple_of() {
-    constexpr const char* doc = docstring_of<obj, with_src_h, bind_h>();
+    constexpr const char* doc = docstring_of<obj_b, with_src_h>();
     if constexpr (doc[0] != '\0') {
         return std::tuple(doc);
     } else {
@@ -157,13 +160,14 @@ consteval auto doctuple_of() {
 }
 
 // ==================== nanobind 原生注解提取 ====================
-template <meta::info obj, meta::info bind_h = meta::info{}>
+template <meta::info obj_b>
 consteval auto nb_annotations_of() {
+    constexpr auto obj = take_bind<obj_b>();
     constexpr auto all_anns = [] {
         std::vector<std::vector<meta::info>> storage{};
         if (obj != meta::dealias(obj)) storage.push_back(meta::annotations_of(meta::dealias(obj)));
         storage.push_back(meta::annotations_of(obj));
-        if (bind_h != meta::info{}) storage.push_back(meta::annotations_of(bind_h));
+        if (obj_b != obj) storage.push_back(meta::annotations_of(obj_b));
         return std::define_static_array(std::views::join(storage));
     }();
 
@@ -175,25 +179,25 @@ consteval auto nb_annotations_of() {
 }
 
 // 总是同时使用
-template <meta::info obj, bool with_src_h, meta::info bind_h = meta::info{}>
+template <meta::info obj_b, bool with_src_h>
 consteval auto extral_annotations_of() {
-    return std::tuple_cat(nb_annotations_of<obj, bind_h>(), doctuple_of<obj, with_src_h, bind_h>());
+    return std::tuple_cat(nb_annotations_of<obj_b>(), doctuple_of<obj_b, with_src_h>());
 }
-
 // ==================== 函数注解解析 ====================
-template <meta::info func, meta::info bind_h = meta::info{}>
+template <meta::info func_b>
 auto parse_func_annotations() {
+    static constexpr auto func = take_bind<func_b>();
     constexpr auto params = std::define_static_array(meta::parameters_of(func));
     constexpr int paramN = params.size();
-    constexpr bool auto_param_name_ = check_anno_bool_value_ex<func, auto_param_name, conf::auto_param_name, bind_h>();
-    constexpr bool with_src_v = check_anno_bool_value_ex<func, with_src, conf::auto_func_src, bind_h>();
+    constexpr bool auto_param_name_ = check_anno_bool_value_ex<func_b, auto_param_name, conf::auto_param_name>();
+    constexpr bool with_src_v = check_anno_bool_value_ex<func_b, with_src, conf::auto_func_src>();
 
     constexpr auto all_args = [] {
         std::vector<meta::info> storage{};
         if constexpr (func != meta::dealias(func))
             storage.append_range(meta::annotations_of_with_type(meta::dealias(func), ^^arg));
         storage.append_range(meta::annotations_of_with_type(func, ^^arg));
-        if constexpr (bind_h != meta::info{}) storage.append_range(meta::annotations_of_with_type(bind_h, ^^arg));
+        if constexpr (func_b != func) storage.append_range(meta::annotations_of_with_type(func_b, ^^arg));
         return std::define_static_array(storage);
     }();
 
@@ -232,7 +236,7 @@ auto parse_func_annotations() {
             auto ind = arg_obj.ind;
             if (!(ind >= 0 && ind < paramN)) {
                 auto it = std::ranges::find_if(params, [&](const auto& p) {
-                    return meta::has_identifier(p) && meta::identifier_of(p) == arg_obj.cpp_name;
+                    return arg_obj.cpp_name && meta::has_identifier(p) && meta::identifier_of(p) == arg_obj.cpp_name;
                 });
                 if (it != params.end()) ind = std::distance(params.begin(), it);
             }

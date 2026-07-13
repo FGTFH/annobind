@@ -4,14 +4,14 @@ function(nanobind_custom_build MODULE_NAME DESTINATION)
     # pyi生成与文件拷贝
     add_custom_command(
         TARGET ${MODULE_NAME} POST_BUILD
-        COMMAND ${Python_EXECUTABLE} -m nanobind.stubgen -m ${MODULE_NAME} -O . --recursive
+        COMMAND ${Python_EXECUTABLE} -m nanobind.stubgen -m ${MODULE_NAME} -O ./stub --recursive
 
         WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
         COMMENT "Generating ${MODULE_NAME}.pyi file"
     )
 
-    install(DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/${MODULE_NAME}/
-        DESTINATION ${DESTINATION}/${MODULE_NAME}
+    install(DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/stub/
+        DESTINATION ${DESTINATION}
         FILES_MATCHING PATTERN "*.pyi")
     install(FILES $<TARGET_FILE:${MODULE_NAME}> DESTINATION ${DESTINATION})
 

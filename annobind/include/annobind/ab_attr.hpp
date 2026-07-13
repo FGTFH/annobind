@@ -56,50 +56,42 @@ struct arg {
     consteval arg(int ind) : ind(ind) {}
     consteval arg(std::string_view cpp_name) { this->cpp_name = std::define_static_string(cpp_name); }
 
-    consteval arg rename(std::string_view name) const {
-        arg other(*this);
-        other.name_ = std::define_static_string(name);
-        return other;
+    consteval arg rename(std::string_view name) {
+        name_ = std::define_static_string(name);
+        return *this;
     }
     // 与 nb::arg 相同的接口
-    consteval arg noconvert(bool value = true) const {
-        arg other(*this);
-        other.nonconvert_ = value;
-        return other;
+    consteval arg noconvert(bool value = true) {
+        nonconvert_ = value;
+        return *this;
     }
-    consteval arg none(bool value = true) const {
-        arg other(*this);
-        other.none_ = value;
-        return other;
+    consteval arg none(bool value = true) {
+        none_ = value;
+        return *this;
     }
-    consteval arg sig(std::string_view value) const {
-        arg other(*this);
-        other.signature_ = std::define_static_string(value);
-        return other;
+    consteval arg sig(std::string_view value) {
+        signature_ = std::define_static_string(value);
+        return *this;
     }
-    consteval arg lock(bool value = true) const {
-        arg other(*this);
-        other.lock_ = value;
-        return other;
+    consteval arg lock(bool value = true) {
+        lock_ = value;
+        return *this;
     }
-    consteval arg kw_only(bool value = true) const {
-        arg other(*this);
-        other.kw_only_ = value;
-        return other;
+    consteval arg kw_only(bool value = true) {
+        kw_only_ = value;
+        return *this;
     }
-    consteval arg defaul_(std::string_view value) const {
-        arg other(*this);
-        other.default_ = std::meta::reflect_constant_string(value);
-        return other;
+    consteval arg defaul_(std::string_view value) {
+        default_ = std::meta::reflect_constant_string(value);
+        return *this;
     }
     template <typename T>
-    consteval arg defaul_(T&& value) const {
-        arg other(*this);
-        other.default_ = std::meta::reflect_constant(value);
-        return other;
+    consteval arg defaul_(T&& value) {
+        default_ = std::meta::reflect_constant(value);
+        return *this;
     }
     template <typename T>
-    consteval arg operator=(T&& value) const
+    consteval arg operator=(T&& value)
         requires(!std::is_lvalue_reference_v<T> && !std::is_same_v<std::remove_cvref_t<T>, arg>)
     {
         return defaul_(std::forward<T>(value));
@@ -164,6 +156,21 @@ struct trampo {
     meta::info type;
 };
 
+// 将函数标记为对应名称的 property, 或者与成员变量名称相同的 property
+// 根据标记的函数是否有参数, 确认其是 getter 还是 setter
+// 若同时提供了 getter 和 setter, 则定义 read-write property
+// 若只提供 getter, 则定义 read-only property
+// 若提供了 setter, 但未提供 getter, 且是通过成员变量指定的, getter将自动生成, 并定义 read-write property
+// 注意: 公开的(静态)数据成员将被自动绑定为相应的 property
+struct property {
+    const char* name = nullptr;
+    meta::info datamem = meta::info{};
+    consteval property(std::string_view name_) { name = std::define_static_string(name_); }
+    consteval property(meta::info datamem) : datamem(datamem) {
+        name = std::define_static_string(meta::identifier_of(datamem));
+    }
+};
+
 // ------------ nanobind ------------
 using is_final = nb::is_final;
 using dynamic_attr = nb::dynamic_attr;
@@ -207,50 +214,59 @@ struct bind {
     meta::info obj;
 };
 
+consteval bool is_ab_annotation(meta::info anno) {
+    return meta::parent_of(meta::remove_cvref(meta::type_of(anno))) == ^^annobind;
+}
+consteval bool is_bind_declaration(meta::info member) {
+    return meta::is_variable(member) && meta::remove_cvref(meta::type_of(member)) == ^^bind;
+}
 namespace detail {
 
+template <meta::info obj>
+consteval auto take_bind() {
+    if constexpr (is_bind_declaration(obj)) return [:obj:].obj;
+    return obj;
+}
 // 通用优先级检查辅助函数
-template <meta::info obj, meta::info bind_h, typename Checker, typename T>
+template <meta::info obj_b, typename Checker, typename T>
 consteval T check_sources_ex(Checker&& checker, T default_val) {
-    // 0. obj 的有效性
-    if constexpr (obj == meta::info{}) return default_val;
-    // 1. 检查 bind_h（如果有效）
-    if constexpr (bind_h != meta::info{})
-        if (auto res = checker(bind_h); res.has_value()) return *res;
-    // 2. 检查 obj
-    if (auto res = checker(obj); res.has_value()) return *res;
-    // 3. 检查 dealias(obj)（如果不同）
+    if constexpr (obj_b == meta::info{}) return default_val;
+    constexpr auto obj = take_bind<obj_b>();
+
+    if (auto res = checker(obj_b); res.has_value()) return *res;
+    if constexpr (obj != obj_b)
+        if (auto res = checker(obj); res.has_value()) return *res;
     if (obj != meta::dealias(obj))
         if (auto res = checker(meta::dealias(obj)); res.has_value()) return *res;
     return default_val;
 }
 
-template <meta::info obj, typename pro, typename con, bool default_, meta::info bind_h = meta::info{}>
+template <meta::info obj_b, typename pro, typename con, bool default_>
 consteval bool check_anno_bool_value_ex() {
     auto checker = [](meta::info src) -> std::optional<bool> {
         if (!meta::annotations_of_with_type(src, ^^pro).empty()) return true;
         if (!meta::annotations_of_with_type(src, ^^con).empty()) return false;
         return std::nullopt;
     };
-    return check_sources_ex<obj, bind_h>(checker, default_);
+    return check_sources_ex<obj_b>(checker, default_);
 }
-template <meta::info obj, typename pro, bool default_, meta::info bind_h = meta::info{}>
+template <meta::info obj_b, typename pro, bool default_>
 consteval bool check_anno_bool_value_ex() {
     auto checker = [](meta::info src) -> std::optional<bool> {
         if (!meta::annotations_of_with_type(src, ^^pro).empty()) return true;
         return std::nullopt;
     };
-    return check_sources_ex<obj, bind_h>(checker, default_);
+    return check_sources_ex<obj_b>(checker, default_);
 }
 
-template <meta::info obj, typename type, auto default_, meta::info bind_h = meta::info{}>
+template <meta::info obj_b, typename type, auto default_>
 consteval type get_annotation_ex() {
     auto checker = [](meta::info src) -> std::optional<type> {
         auto ann = meta::annotations_of_with_type(src, ^^type);
         if (!ann.empty()) return meta::extract<type>(ann[0]);
         return std::nullopt;
     };
-    return check_sources_ex<obj, bind_h>(checker, default_);
+    return check_sources_ex<obj_b>(checker, default_);
 }
 
 template <meta::info obj, typename pro, typename con, bool default_>
@@ -275,10 +291,4 @@ consteval type get_annotation() {
 
 }  // namespace detail
 
-consteval bool is_ab_annotation(meta::info anno) {
-    return meta::parent_of(meta::remove_cvref(meta::type_of(anno))) == ^^annobind;
-}
-consteval bool is_bind_declaration(meta::info member) {
-    return meta::is_variable(member) && meta::remove_cvref(meta::type_of(member)) == ^^bind;
-}
 }  // namespace annobind

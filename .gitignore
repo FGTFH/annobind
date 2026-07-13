@@ -17,3 +17,5 @@ build/*
 .vscode/launch.json
 uv.lock
 .python-version
+.test/
+bin/

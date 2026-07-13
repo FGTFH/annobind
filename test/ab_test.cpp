@@ -33,6 +33,9 @@ struct IInnerClass;
 struct PyMyClass;
 // 类
 class[[= ab::trampo{^^PyMyClass}]] MyClass {
+   private:
+    int e, f, g, h;
+
    public:
     int x = 0;
     std::string name = "default";
@@ -48,6 +51,20 @@ class[[= ab::trampo{^^PyMyClass}]] MyClass {
 
     // 普通成员函数, 参数注解中的第一个非ab::arg标注会被视为默认值
     [[= ab::arg("x_").rename("new_x")]] void setX([[= 42]] int x_) { x = x_; }
+
+    // 绑定 property rw -- 以成员变量之名命名
+    [[= ab::property(^^MyClass::e)]] int get_e() const { return e; }  // 实际上可自动生成这样的getter
+    [[ = ab::property(^^MyClass::e), = ab::arg(0).rename("e").defaul_(10).kw_only() ]] void set_e(int e_) { e = e_; }
+
+    // 绑定 property rw -- 以字符串命名
+    [[= ab::property("f")]] void set_f(int f_) { f = f_; }
+    [[= ab::property("f")]] auto get_f() { return f; }  // 直接以字符串声明的property需要提供getter
+
+    // 绑定 property ro
+    [[= ab::property("g")]] auto get_g() { return g; }  // 只给出getter的property将read-only
+
+    // 无法绑定 property wo
+    // [[= ab::property("h")]] void set_h(int h_) { h = h_; } // 无法定义write-only property
 
     // 静态方法模板
     template <typename T>
@@ -65,6 +82,8 @@ class[[= ab::trampo{^^PyMyClass}]] MyClass {
     class InnerClass {
         // 未被禁用的默认构造函数会被隐式绑定
         InnerClass() = delete;
+        // 显式声明的复制构造函数会被绑定
+        InnerClass(const InnerClass&) = default;
     };
 
     // 嵌套类模板

@@ -4,7 +4,7 @@
 #define AB_AUTO_MODULE_SRC false
 #endif
 #ifndef AB_AUTO_TYPE_SRC
-#define AB_AUTO_TYPE_SRC false
+#define AB_AUTO_TYPE_SRC true
 #endif
 #ifndef AB_AUTO_FUNC_SRC
 #define AB_AUTO_FUNC_SRC false
