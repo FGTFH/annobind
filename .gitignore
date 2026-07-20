@@ -19,3 +19,4 @@ uv.lock
 .python-version
 .test/
 bin/
+.clangd

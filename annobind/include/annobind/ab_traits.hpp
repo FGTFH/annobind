@@ -1,6 +1,9 @@
 #pragma once
 #include <meta>
 #include <type_traits>
+
+#include "ab_attr.hpp"
+
 namespace annobind {
 namespace meta = std::meta;
 

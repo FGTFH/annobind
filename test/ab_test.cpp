@@ -6,8 +6,10 @@
 #include <array>
 #include <meta>
 #include <print>
+#include <ranges>
 
-#include "annobind.hpp"
+#include "annobind/ab_register.hpp"
+#include "annobind/annobind.hpp"
 #include "t_queue.hpp"
 
 namespace nb = nanobind;
@@ -72,9 +74,10 @@ class[[= ab::trampo{^^PyMyClass}]] MyClass {
         std::println("templateMethod {}", t);
     }
 
-    // 使用直接绑定声明是唯一的绑定模板函数的方法
-    // 模板实例, 注意到最终有效的函数签名相当于ab::arg(0).rename("t_").defaul_(T{}).kw_only(),
-    [[= ab::arg(0).rename("t_")]] static constexpr auto templateMethodInt = ab::bind{^^templateMethod<int>};
+    // 模板实例, 注意到最终有效的函数签名相当于ab::arg(0).rename("t_").defaul_(T{}).kw_only()
+    // 这里使用了直接绑定声明 bind + annoset(列表初始化)
+    static constexpr auto templateMethodInt = ab::bind<^^templateMethod<int>, {
+                                                                                  ab::arg(0).rename("t_")}>{};
 
     // 类型尚未绑定的成员变量
     std::array<int, 10> q;
@@ -94,8 +97,8 @@ class[[= ab::trampo{^^PyMyClass}]] MyClass {
         void show(T x) const { std::println("InnerTClass y={}", y); }
     };
     //
-    static constexpr auto templateInnerClass = ab::bind{^^InnerTClass<int>};
-    [[= ab::plain()]] static constexpr auto templateInnerClassPlain = ab::bind{^^InnerTClass<float>};
+    static constexpr auto templateInnerClass = ab::bind<^^InnerTClass<int>>{};
+    static constexpr auto templateInnerClassPlain = ab::bind<^^InnerTClass<float>, ab::annoset(ab::plain{})>{};
     // typedef类型别名可以被绑定
     typedef InnerTClass<double> templateInnerClassDef[[= ab::unskip()]];
 
@@ -120,12 +123,16 @@ static const int statiConstGlobalVar = 44;
 const int constGlobal = 45;
 constexpr int constexprGlobal = 46;
 
-// 命名空间内的函数
-[[= ab::arg(0).rename("a_")]] int add(int a, [[= ab::defaul_(10).kw_only()]] int b) { return a + b; }
+namespace[[= ab::skip()]] conf {
+// 可预配置注解集, 这在部分手动绑定时或许很有用
+constexpr auto add_a = ab::annoset(ab::arg(0).rename("a_"), ab::rename("add_a"));
+}  // namespace conf
+
+// 命名空间内的函数, 这里使用了预配置的注解集
+[[= conf::add_a]] int add(int a, [[= ab::defaul_(10).kw_only()]] int b) { return a + b; }
 
 // 使用 bind 显式绑定模板实例化,可以跨命名空间
-static constexpr auto f_int = ab::bind{^^f<int>};
-
+static constexpr auto f_int = ab::bind<^^f<int>>{};
 // 嵌套命名空间->子模块
 namespace inner {
 [[= ab::doc("Inner function")]] void innerFunc() { std::println("inner"); }
@@ -138,7 +145,7 @@ struct IInnerClass {
     } i2;
 
     // 虽然类可以绑定到任何地方，但不建议也没有必要这样做
-    static constexpr auto templateInnerClassOuter = ab::bind{^^MyClass::InnerTClass<char>};
+    static constexpr auto templateInnerClassOuter = ab::bind<^^MyClass::InnerTClass<char>>{};
 };
 }  // namespace inner
 
@@ -150,12 +157,14 @@ void mainLevelFunc() { std::println("This should be in main module"); }
 namespace[[ = ab::plain(), = ab::skip() ]] inner3 {
 void mainLevelFunc2() {};
 }  // namespace inner3
+using namespace inner3;  //  并不会污染父命名空间, 即mainLevelFunc2不会被认为是test的成员而被自动绑定
 
 // 尝试绑定STL容器. 作为聚合体，array有不能导出的成员_M_elems，需要skip_data, 当然, 它实际上并不适合直接导出
-[[= ab::skip_data()]] static constexpr auto IntArray10 = ab::bind(^^std::array<int, 10>);
+[[= ab::skip_data()]] static constexpr auto IntArray10 =
+    ab::bind<^^std::array<int, 10>, ab::annoset(ab::skip_data{})>{};
 
 // 一个比较适合导出的Queue
-static constexpr auto QueueInt = ab::bind(^^Queue<int>);
+static constexpr auto QueueInt = ab::bind<^^Queue<int>>{};
 
 }  // namespace test
 
@@ -165,11 +174,11 @@ enum class Color2 { Black, Gray, White };
 namespace recursive2 {}
 
 namespace recursive1 {
-static constexpr auto n2 = ab::bind{^^recursive2};
+static constexpr auto n2 = ab::bind<^^recursive2>{};
 }
 
 namespace recursive2 {
-static constexpr auto n1 = ab::bind{^^recursive1};
+static constexpr auto n1 = ab::bind<^^recursive1>{};
 }
 // 无限递归模型>
 
@@ -179,8 +188,24 @@ NB_MODULE(PROJECT_NAME, m) {
     // 根据注解, 绑定整个命名空间 test 到模块 m
     auto test_mod = annobind::bind_to_module<^^test>(m);
     // 手动绑定
+    // - 绑定模块成员
     annobind::bind_module_member<^^Color2>(m);
 
+    // -绑定类成员
+    // --查找类的绑定实例(需要开启reg_guard)
+    auto inner_cls_p = annobind::ABRegistry::find_class<test::inner::IInnerClass>();
+    // --进行绑定
+    if (inner_cls_p) {
+        auto inner_cls = *inner_cls_p;
+        static constexpr auto bind_i2 = ab::bind<^^test::inner::IInnerClass::i2, ab::annoset(ab::rename("i2"))>{};
+        annobind::bind_class_member<^^bind_i2>(inner_cls);
+        // 或者直接
+        //  annobind::bind_class_member<^^test::inner::IInnerClass::i2>(inner_cls);
+
+        auto f = [](test::inner::IInnerClass& self, int a) { return a; };
+        // 可以直接使用nb接口绑定函数. 请注意, 由于无法获取lambda函数本身数的反射(而不是函数指针), 无法使用ab绑定
+        inner_cls.def("f", f);
+    }
     //  手动绑定默认会忽略skip注解. 注意plain注解仍生效了,没有创建新的子模块, 且mainLevelFunc2在主模块中
     annobind::bind_module_member<^^test::inner3>(m, m);
 

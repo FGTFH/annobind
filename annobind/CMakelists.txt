@@ -2,5 +2,5 @@ project(annobind)
 
 add_library(annobind INTERFACE)
 target_include_directories(annobind INTERFACE
-    include/annobind
+    include
 )

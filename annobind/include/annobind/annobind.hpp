@@ -39,7 +39,7 @@ template <meta::info cls_b>
     requires(detail::is_non_enum_type<cls_b>() || is_bind_declaration(cls_b))
 auto make_nb_class(nb::handle& nb_scope) {
     // 提取选项
-    constexpr auto cls = detail::take_bind<cls_b>();
+    constexpr auto cls = detail::take_bind_obj<cls_b>();
     constexpr const char* cls_name = detail::name_of<cls_b>();
     constexpr auto extra_annons = detail::extral_annotations_of<cls_b, conf::auto_type_src>();
     constexpr meta::info trampoline = detail::get_annotation_ex<cls_b, trampo, trampo{meta::info{}}>().type;
@@ -79,14 +79,17 @@ auto bind_function(nb::module_& nb_mod);
 // `ns_b` 提供成员跳过检查标注, 默认为 `mbr_b` 所在的命名空间(别名的标注会丢失), 可为任意可标注的实体
 // `skip_check` 用于标识自动绑定, 默认值false表示不进行skip相关标注的检查, 而强制进行绑定
 template <meta::info mbr_b, meta::info ns_b = meta::info{}, bool skip_check = false>
-    requires(meta::is_namespace_member(mbr_b) || is_bind_declaration(mbr_b))
 auto bind_module_member(nb::module_& nb_mod, std::optional<nb::module_&> nb_base = std::nullopt);
 
 //  绑定`nb_cls`对应类的成员 `mbr_b`.
 // `cls_b` 与 `skip_check` 同 bind_module_member
 template <meta::info mbr_b, meta::info cls_b = meta::info{}, bool skip_check = false>
-    requires(meta::is_class_member(mbr_b) || is_bind_declaration(mbr_b))
-auto bind_class_member(auto& nb_cls, std::optional<nb::handle&> nb_base = std::nullopt);
+auto bind_class_member(auto& nb_cls, std::optional<nb::handle> nb_base = std::nullopt);
+
+// property绑定辅助函数
+template <auto prop, meta::info cls>
+    requires(detail::is_non_enum_type<cls>())
+auto bind_class_property(auto& nb_cls, const char* name);
 
 // 将类 `cls_b` 绑定到 `nb_scope`
 template <meta::info cls_b>
@@ -108,7 +111,7 @@ auto& bind_to_module(nb::module_& nb_mod, std::optional<nb::module_&> nb_base = 
 template <meta::info enum_b>
     requires(detail::is_enum_type<enum_b>() || is_bind_declaration(enum_b))
 auto bind_enum(nb::handle& nb_scp) {
-    constexpr auto enum_ = detail::take_bind<enum_b>();
+    constexpr auto enum_ = detail::take_bind_obj<enum_b>();
     using T = typename[:enum_:];
     if (auto nb_enum_old = ABRegistry::find_enum<T>()) {
         std::println("[annobind warn] enum {} already bound", meta::display_string_of(enum_));
@@ -137,7 +140,7 @@ auto bind_enum(nb::handle& nb_scp) {
 template <meta::info func_b>
     requires(meta::is_function(func_b) || is_bind_declaration(func_b))
 auto bind_function(nb::module_& nb_mod) {
-    constexpr auto func = detail::take_bind<func_b>();
+    constexpr auto func = detail::take_bind_obj<func_b>();
     constexpr const char* name = detail::name_of<func_b>();
     static_assert(name[0] != '\0', "name must be specified");
 
@@ -146,10 +149,9 @@ auto bind_function(nb::module_& nb_mod) {
 }
 
 template <meta::info mbr_b, meta::info ns_b, bool skip_check_>
-    requires(meta::is_namespace_member(mbr_b) || is_bind_declaration(mbr_b))
 auto bind_module_member(nb::module_& nb_mod, std::optional<nb::module_&> nb_base) {
     if (!nb_base.has_value()) nb_base = nb_mod;
-    constexpr auto mbr = detail::take_bind<mbr_b>();
+    constexpr auto mbr = detail::take_bind_obj<mbr_b>();
     constexpr auto skip_check = mbr != mbr_b ? false : skip_check_;
     constexpr auto ns = [] {
         if (ns_b == meta::info{}) return meta::parent_of(mbr);
@@ -201,10 +203,9 @@ auto bind_module_member(nb::module_& nb_mod, std::optional<nb::module_&> nb_base
 }
 
 template <meta::info mbr_b, meta::info cls_b, bool skip_check_>
-    requires(meta::is_class_member(mbr_b) || is_bind_declaration(mbr_b))
-auto bind_class_member(auto& nb_cls, std::optional<nb::handle&> nb_base) {
-    if (!nb_base.has_value()) nb_base = nb_cls;
-    constexpr auto mbr = detail::take_bind<mbr_b>();
+auto bind_class_member(auto& nb_cls, std::optional<nb::handle> nb_base) {
+    if (!nb_base.has_value()) nb_base = nb::handle(nb_cls.ptr());
+    constexpr auto mbr = detail::take_bind_obj<mbr_b>();
     constexpr auto skip_check = mbr != mbr_b ? false : skip_check_;
     constexpr auto cls = [&] {
         if (cls_b == meta::info{}) return meta::parent_of(mbr);
@@ -241,7 +242,7 @@ auto bind_class_member(auto& nb_cls, std::optional<nb::handle&> nb_base) {
             // ---------- 函数成员 ----------
             constexpr bool df = detail::check_anno_bool_value_ex<cls, skip_func, conf::auto_skip_func>();
             if constexpr (!skip_check || !detail::check_anno_bool_value<mbr_b, skip, unskip, df>()) {
-                auto extra_args = detail::parse_func_annotations<mbr>();
+                auto extra_args = detail::parse_func_annotations<mbr_b>();
 
                 if constexpr (meta::is_constructor(mbr)) {
                     // ---------- 构造函数 ----------
@@ -251,24 +252,15 @@ auto bind_class_member(auto& nb_cls, std::optional<nb::handle&> nb_base) {
                                                                             std::views::transform([](auto p) {
                                                                                 return meta::type_of(p);
                                                                             }))):];
-                    std::apply(
-                        [&](const auto&... args) { nb_cls.def(init_type(), std::forward<decltype(args)>(args)...); },
-                        extra_args);
+                    std::apply([&](const auto&... args) { nb_cls.def(init_type(), args...); }, extra_args);
 
                 } else {
                     // ---------- 具名函数/运算符 ----------
                     if constexpr (meta::is_static_member(mbr)) {
-                        std::apply(
-                            [&](const auto&... args) {
-                                nb_cls.def_static(name, &[:mbr:], std::forward<decltype(args)>(args)...);
-                            },
-                            extra_args);
+                        std::apply([&](const auto&... args) { nb_cls.def_static(name, &[:mbr:], args...); },
+                                   extra_args);
                     } else {
-                        std::apply(
-                            [&](const auto&... args) {
-                                nb_cls.def(name, &[:mbr:], std::forward<decltype(args)>(args)...);
-                            },
-                            extra_args);
+                        std::apply([&](const auto&... args) { nb_cls.def(name, &[:mbr:], args...); }, extra_args);
                     }
                 }
             }
@@ -292,6 +284,43 @@ auto bind_class_member(auto& nb_cls, std::optional<nb::handle&> nb_base) {
                     return bind_class<mbr_b>(to_scope, *nb_base);
                 }
             }
+        } else if constexpr (!meta::is_class_member(mbr) && meta::is_function(mbr)) {
+            // ---------------- 非成员函数 ----------------
+            // 由于一定不是自动触发的, 所以不需要跳过检查
+            auto extra_args = detail::parse_func_annotations<mbr_b>();
+            std::apply([&](const auto&... args) { nb_cls.def_static(name, &[:mbr:], args...); }, extra_args);
+        }
+    }
+}
+
+template <auto prop, meta::info cls>
+    requires(detail::is_non_enum_type<cls>())
+auto bind_class_property(auto& nb_cls, const char* name) {
+    constexpr auto getter = prop.getter;
+    constexpr auto setter = prop.setter;
+
+    if constexpr (setter == meta::info{}) {
+        static_assert(meta::is_function(getter), "bad property declaration");
+
+        auto getter_args = detail::parse_func_annotations<getter>();
+        std::apply([&](const auto&... args) { nb_cls.def_prop_ro(name, &[:getter:], args...); }, getter_args);
+    } else {
+        static_assert(meta::is_function(setter), "bad property declaration");
+        auto setter_args = std::apply([](const auto&... args) { return std::tuple(nb::for_setter(args)...); },
+                                      detail::parse_func_annotations<setter>());
+
+        if constexpr (meta::is_function(getter)) {
+            auto getter_args = std::apply([](const auto&... args) { return std::tuple(nb::for_getter(args)...); },
+                                          detail::parse_func_annotations<getter>());
+            std::apply([&](const auto&... args) { nb_cls.def_prop_rw(name, &[:getter:], &[:setter:], args...); },
+                       std::tuple_cat(getter_args, setter_args));
+
+        } else {
+            static_assert(meta::is_nonstatic_data_member(getter), "bad property declaration");
+            using T = typename[:cls:];
+            auto getter_ = [](T& self) { return self.[:getter:]; };
+            std::apply([&](const auto&... args) { nb_cls.def_prop_rw(name, getter_, &[:setter:], args...); },
+                       setter_args);
         }
     }
 }
@@ -300,83 +329,18 @@ template <meta::info cls_b>
     requires(detail::is_non_enum_type<cls_b>() || is_bind_declaration(cls_b))
 auto bind_class(nb::handle& nb_scope, std::optional<nb::handle&> nb_base) {
     if (!nb_base.has_value()) nb_base = nb_scope;
-    constexpr auto cls = detail::take_bind<cls_b>();
+    constexpr auto cls = detail::take_bind_obj<cls_b>();
     if (auto nb_cls_old = ABRegistry::find_class<typename[:cls:]>()) {
         std::println("[annobind warn] class {} already bound", meta::display_string_of(meta::dealias(cls)));
         return *nb_cls_old;
     }
 
     auto nb_cls = detail::make_nb_class<cls_b>(nb_scope);
-    static constexpr auto access_ctx = meta::access_context::current();
 
-    struct PropInfo {
-        meta::info getter;
-        meta::info setter;
-    };
-    static constexpr auto [props, members] = [] {
-        std::flat_map<std::string_view, PropInfo> props;
-        std::vector<meta::info> bindmems;
-
-        template for (constexpr auto& member : std::define_static_array(meta::members_of(cls, access_ctx))) {
-            if constexpr (detail::is_bindable<member>()) {
-                constexpr auto prop_ann = std::define_static_array(meta::annotations_of_with_type(member, ^^property));
-                if constexpr (prop_ann.empty())
-                    bindmems.push_back(member);
-                else {
-                    constexpr auto func = [] {
-                        if constexpr (is_bind_declaration(member))
-                            return [:member:].obj;
-                        else
-                            return member;
-                    }();
-                    constexpr auto paramN = meta::parameters_of(func).size();
-                    static_assert(paramN <= 1, "property getter/setter must have 0 or 1 parameter");
-                    auto is_getter = paramN == 0;
-                    auto prop_v = meta::extract<property>(prop_ann[0]);
-                    auto& prop = props[prop_v.name];
-                    if (is_getter)
-                        props[prop_v.name].getter = member;
-                    else {
-                        prop.setter = member;
-                        if (prop_v.datamem != meta::info{} && prop.getter == meta::info{}) prop.getter = prop_v.datamem;
-                    }
-                }
-            }
-        }
-        return std::make_pair(std::define_static_array(props | std::views::transform([](const auto& p) {
-                                                           return std::make_pair(p.first.data(), p.second);
-                                                       })),
-                              std::define_static_array(bindmems));
-    }();
+    static constexpr auto [props, members] = detail::parse_cls_props_annotations<cls>();
     template for (constexpr auto& prop : props) {
         constexpr auto name = prop.first;
-        constexpr auto getter = prop.second.getter;
-        constexpr auto setter = prop.second.setter;
-
-        if constexpr (setter == meta::info{}) {
-            static_assert(meta::is_function(getter), "bad property declaration");
-
-            auto getter_args = detail::parse_func_annotations<getter>();
-            std::apply([&](const auto&... args) { nb_cls.def_prop_ro(name, &[:getter:], args...); }, getter_args);
-        } else {
-            static_assert(meta::is_function(setter), "bad property declaration");
-            auto setter_args = std::apply([](const auto&... args) { return std::tuple(nb::for_setter(args)...); },
-                                          detail::parse_func_annotations<setter>());
-
-            if constexpr (meta::is_function(getter)) {
-                auto getter_args = std::apply([](const auto&... args) { return std::tuple(nb::for_getter(args)...); },
-                                              detail::parse_func_annotations<getter>());
-                std::apply([&](const auto&... args) { nb_cls.def_prop_rw(name, &[:getter:], &[:setter:], args...); },
-                           std::tuple_cat(getter_args, setter_args));
-
-            } else {
-                static_assert(meta::is_nonstatic_data_member(getter), "bad property declaration");
-                using T = typename[:cls:];
-                auto getter_ = [](T& self) { return self.[:getter:]; };
-                std::apply([&](const auto&... args) { nb_cls.def_prop_rw(name, getter_, &[:setter:], args...); },
-                           setter_args);
-            }
-        }
+        bind_class_property<prop.second, cls>(nb_cls, name);
     }
     template for (constexpr auto& mbr_b : members) { bind_class_member<mbr_b, cls_b, true>(nb_cls, *nb_base); }
     return nb_cls;
@@ -402,9 +366,10 @@ template <meta::info ns_b>
     requires(meta::is_namespace(ns_b) || is_bind_declaration(ns_b))
 auto& bind_to_module(nb::module_& nb_mod, std::optional<nb::module_&> nb_base) {
     if (!nb_base.has_value()) nb_base = nb_mod;
-    constexpr auto ns = detail::take_bind<ns_b>();
+    constexpr auto ns = detail::take_bind_obj<ns_b>();
     constexpr auto access_ctx = meta::access_context::current();
     template for (constexpr const auto& member : std::define_static_array(meta::members_of(ns, access_ctx))) {
+        // std::println("bind {}", meta::display_string_of(member));
         bind_module_member<member, ns_b, true>(nb_mod, *nb_base);
     }
     return nb_mod;

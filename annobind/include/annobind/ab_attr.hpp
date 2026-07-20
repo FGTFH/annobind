@@ -2,8 +2,10 @@
 #include <nanobind/nanobind.h>
 
 #include <meta>
+#include <span>
 #include <string_view>
 #include <type_traits>
+#include <vector>
 
 #include "ab_config.hpp"
 #include "ab_traits.hpp"
@@ -205,47 +207,146 @@ using is_arithmetic = nb::is_arithmetic;
 // 对嵌套作用域：将其中的成员绑定到根模块
 struct plain {};
 
-// =============== 主动绑定声明 ===============
-// 在作用域中, 主动绑定一个可绑定实体到当前作用域(可跨作用域, 但需有效), 可用于(成员)模板函数/类等的绑定.
-// 无论在命名空间还是类中, 都以
-// static constexpr fi = ab::bind{^^f<int>}
-// 的形式声明,其标注与template<>f的标注都会生效, 且覆盖优先级最高
-struct bind {
-    meta::info obj;
+// =============== 属性集 ===============
+// 将多个ab标注放在一起, 方便手动绑定(目前不支持嵌套).
+// 出于效率和处理便宜方面的考虑, 使用静态数组. 空间上应该完全不用关心, 毕竟只在编译期有效
+
+struct annoset {
+    static constexpr size_t maxN = conf::attrs_max_n;
+    std::array<meta::info, maxN> arr;
+    size_t size_;
+    template <typename... Ts>
+        requires(sizeof...(Ts) != 1 || (... && !std::same_as<std::decay_t<Ts>, annoset>))
+    consteval annoset(Ts&&... vals)
+        : arr{meta::reflect_constant(std::forward<decltype(vals)>(vals))...}, size_(sizeof...(vals)) {
+        static_assert(sizeof...(vals) <= maxN,
+                      "too many annotations in a single annoset, you may need to increase maxN");
+    };
+
+    consteval annoset(std::span<const meta::info> const& objs) : arr{}, size_(objs.size()) {
+        std::copy(objs.begin(), objs.end(), arr.begin());
+    };
+
+    consteval auto begin(this auto&& self) { return self.arr.begin(); }
+    consteval auto end(this auto&& self) { return self.arr.begin() + self.size_; }
+    consteval auto& operator[](this auto&& self, size_t i) { return self.arr[i]; }
+
+    consteval auto size() const { return size_; }
+
+    consteval void extend(annoset const& objs) {
+        std::copy(objs.begin(), objs.end(), end());
+        size_ += objs.size();
+    }
+
+    static consteval annoset concat(const annoset& a, const annoset& b) {
+        annoset res = a;
+        std::copy(b.begin(), b.end(), res.end());  // 具有边界检查
+        res.size_ += b.size();
+        return res;
+    }
 };
 
+// 替代实现, 但使用时需要检查模板参数, 非常不方便
+//  template <size_t N>
+//  struct annoset {
+//      std::array<meta::info, N> annoset;
+//      consteval annoset(auto&&... args) : annoset{meta::reflect_constant(std::forward<decltype(args)>(args))...} {
+//          static_assert(sizeof...(args) == N);
+//      };
+//  };
+// annoset(auto&&... args) -> annoset<sizeof...(args)>;
+
+// =============== 主动绑定声明 ===============
+// 主动绑定一个可绑定实体(可跨作用域, 但需有效), 可用于(成员)模板函数/类等的绑定.
+// 在任何地方, 都建议以
+// static constexpr fi = ab::bind<^^f<int>,ab::annoset(...)>
+// 的形式声明, ab::annoset中的与template<>f的标注都会生效, 且覆盖优先级最高
+// 该类提供了将标注参数化的方式, 这在手动绑定中可能会很有用
+template <std::meta::info obj_, annobind::annoset annoset_ = {}>
+struct bind {
+    [[= annoset_]] static constexpr auto obj = obj_;
+};
+
+// =============== attr相关辅助函数 ===============
 consteval bool is_ab_annotation(meta::info anno) {
     return meta::parent_of(meta::remove_cvref(meta::type_of(anno))) == ^^annobind;
 }
 consteval bool is_bind_declaration(meta::info member) {
-    return meta::is_variable(member) && meta::remove_cvref(meta::type_of(member)) == ^^bind;
+    if (!meta::is_variable(member))
+        return false;
+    else {
+        meta::info type = meta::remove_cvref(meta::type_of(member));
+        if (!meta::has_template_arguments(type))
+            return false;
+        else
+            return meta::template_of(type) == ^^bind;
+    }
+}
+
+consteval auto annotations_of_with_type_a(meta::info obj, meta::info type) {
+    std::vector<meta::info> anns{std::from_range, meta::annotations_of_with_type(obj, type)};
+    for (const auto& atrset : meta::annotations_of_with_type(obj, ^^annoset)) {
+        for (const auto& ann : meta::extract<annoset>(atrset)) {
+            if (meta::remove_cvref(meta::type_of(ann)) == type) anns.push_back(ann);
+        }
+    }
+    return anns;
+}
+
+consteval auto annotations_of_a(meta::info obj) {
+    std::vector<meta::info> anns;
+    for (const auto& ann : meta::annotations_of(obj)) {
+        if (meta::remove_cvref(meta::type_of(ann)) != ^^annoset) {
+            anns.push_back(ann);
+        } else {
+            for (const auto& an : meta::extract<annoset>(ann)) {
+                anns.push_back(an);
+            }
+        }
+    }
+    return anns;
 }
 namespace detail {
-
-template <meta::info obj>
-consteval auto take_bind() {
-    if constexpr (is_bind_declaration(obj)) return [:obj:].obj;
-    return obj;
+template <meta::info obj_b>
+consteval auto take_bind_obj() {
+    if constexpr (is_bind_declaration(obj_b)) {
+        using Bind = typename[:std::meta::type_of(obj_b):];
+        return Bind::obj;
+    }
+    return obj_b;
 }
+
+template <meta::info obj_b>
+consteval auto take_bind_anno_obj() {
+    using Bind = typename[:std::meta::type_of(obj_b):];
+    return ^^Bind::obj;
+}
+
 // 通用优先级检查辅助函数
 template <meta::info obj_b, typename Checker, typename T>
 consteval T check_sources_ex(Checker&& checker, T default_val) {
-    if constexpr (obj_b == meta::info{}) return default_val;
-    constexpr auto obj = take_bind<obj_b>();
-
-    if (auto res = checker(obj_b); res.has_value()) return *res;
-    if constexpr (obj != obj_b)
+    // 0. 空值
+    if constexpr (obj_b == meta::info{})
+        return default_val;
+    else {
+        constexpr auto obj = take_bind_obj<obj_b>();
+        // 1. 主动绑定声明
+        if constexpr (obj_b != obj)
+            if (auto res = checker(take_bind_anno_obj<obj_b>()); res.has_value()) return *res;
+        // 2. 实体(可能为别名)
         if (auto res = checker(obj); res.has_value()) return *res;
-    if (obj != meta::dealias(obj))
-        if (auto res = checker(meta::dealias(obj)); res.has_value()) return *res;
-    return default_val;
+        // 3. 别名dealias
+        if (obj != meta::dealias(obj))
+            if (auto res = checker(meta::dealias(obj)); res.has_value()) return *res;
+        return default_val;
+    }
 }
 
 template <meta::info obj_b, typename pro, typename con, bool default_>
 consteval bool check_anno_bool_value_ex() {
     auto checker = [](meta::info src) -> std::optional<bool> {
-        if (!meta::annotations_of_with_type(src, ^^pro).empty()) return true;
-        if (!meta::annotations_of_with_type(src, ^^con).empty()) return false;
+        if (!annotations_of_with_type_a(src, ^^pro).empty()) return true;
+        if (!annotations_of_with_type_a(src, ^^con).empty()) return false;
         return std::nullopt;
     };
     return check_sources_ex<obj_b>(checker, default_);
@@ -253,7 +354,7 @@ consteval bool check_anno_bool_value_ex() {
 template <meta::info obj_b, typename pro, bool default_>
 consteval bool check_anno_bool_value_ex() {
     auto checker = [](meta::info src) -> std::optional<bool> {
-        if (!meta::annotations_of_with_type(src, ^^pro).empty()) return true;
+        if (!annotations_of_with_type_a(src, ^^pro).empty()) return true;
         return std::nullopt;
     };
     return check_sources_ex<obj_b>(checker, default_);
@@ -262,7 +363,7 @@ consteval bool check_anno_bool_value_ex() {
 template <meta::info obj_b, typename type, auto default_>
 consteval type get_annotation_ex() {
     auto checker = [](meta::info src) -> std::optional<type> {
-        auto ann = meta::annotations_of_with_type(src, ^^type);
+        auto ann = annotations_of_with_type_a(src, ^^type);
         if (!ann.empty()) return meta::extract<type>(ann[0]);
         return std::nullopt;
     };
@@ -271,20 +372,20 @@ consteval type get_annotation_ex() {
 
 template <meta::info obj, typename pro, typename con, bool default_>
 consteval bool check_anno_bool_value() {
-    if (!meta::annotations_of_with_type(obj, ^^pro).empty()) return true;
-    if (!meta::annotations_of_with_type(obj, ^^con).empty()) return false;
+    if (!annotations_of_with_type_a(obj, ^^pro).empty()) return true;
+    if (!annotations_of_with_type_a(obj, ^^con).empty()) return false;
     return default_;
 }
 
 template <meta::info obj, typename pro, bool default_>
 consteval bool check_anno_bool_value() {
-    if (!meta::annotations_of_with_type(obj, ^^pro).empty()) return true;
+    if (!annotations_of_with_type_a(obj, ^^pro).empty()) return true;
     return default_;
 }
 
 template <meta::info obj, typename type, auto default_>
 consteval type get_annotation() {
-    auto ann = meta::annotations_of_with_type(obj, ^^type);
+    auto ann = annotations_of_with_type_a(obj, ^^type);
     if (!ann.empty()) return meta::extract<type>(ann[0]);
     return default_;
 }

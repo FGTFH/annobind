@@ -9,6 +9,7 @@
 #include <string>
 #include <string_view>
 #include <tuple>
+#include <vector>
 
 #include "ab_attr.hpp"
 #include "ab_config.hpp"
@@ -72,7 +73,7 @@ static constexpr auto op2magic = [] {
 inline constexpr std::string u32_to_str(unsigned int value) {
     if (value == 0) return "0";
     char buffer[11];  // 最大10位数字+1
-    int idx = 10;
+    int idx = sizeof(buffer) - 1;
     buffer[idx--] = '\0';
     while (value > 0) {
         buffer[idx--] = '0' + (value % 10);
@@ -92,15 +93,15 @@ inline constexpr std::string u32_to_str(unsigned int value) {
 // 7. dealias(obj) 的 identifier
 template <meta::info obj_b>
 consteval const char* name_of() {
-    constexpr auto obj = take_bind<obj_b>();
-    auto ann = meta::annotations_of_with_type(obj_b, ^^rename);
-    if (ann.size() > 0) return meta::extract<rename>(ann[0]).name;
-    if constexpr (obj != obj_b) {
-        auto ann = meta::annotations_of_with_type(obj, ^^rename);
+    constexpr auto obj = take_bind_obj<obj_b>();
+    if constexpr (obj_b != obj) {
+        auto ann = annotations_of_with_type_a(take_bind_anno_obj<obj_b>(), ^^rename);
         if (ann.size() > 0) return meta::extract<rename>(ann[0]).name;
     }
+    auto ann = annotations_of_with_type_a(obj, ^^rename);
+    if (ann.size() > 0) return meta::extract<rename>(ann[0]).name;
     if (obj != meta::dealias(obj)) {
-        auto ann = meta::annotations_of_with_type(meta::dealias(obj), ^^rename);
+        auto ann = annotations_of_with_type_a(meta::dealias(obj), ^^rename);
         if (ann.size() > 0) return meta::extract<rename>(ann[0]).name;
     }
     if (meta::is_operator_function(obj) && meta::is_class_member(obj)) {
@@ -123,7 +124,7 @@ consteval const char* docstring_of() {
 
     // 收集 doc 注解（先后顺序：dealias(obj) > obj > bind_h）
     auto append_doc = [&](meta::info target) {
-        auto ann = meta::annotations_of_with_type(target, ^^doc);
+        auto ann = annotations_of_with_type_a(target, ^^doc);
         if (!ann.empty()) {
             auto doc_ann = meta::extract<doc>(ann[0]);
             if (doc_ann.text[0] != '\0') {
@@ -133,10 +134,10 @@ consteval const char* docstring_of() {
         }
     };
 
-    constexpr auto obj = take_bind<obj_b>();
+    constexpr auto obj = take_bind_obj<obj_b>();
     if constexpr (meta::dealias(obj) != obj) append_doc(meta::dealias(obj));
     append_doc(obj);
-    if constexpr (obj_b != obj) append_doc(obj_b);
+    if constexpr (obj_b != obj) append_doc(take_bind_anno_obj<obj_b>());
 
     // 附加源码位置（如果需要）
     if constexpr (with_src_v) {
@@ -162,12 +163,12 @@ consteval auto doctuple_of() {
 // ==================== nanobind 原生注解提取 ====================
 template <meta::info obj_b>
 consteval auto nb_annotations_of() {
-    constexpr auto obj = take_bind<obj_b>();
+    constexpr auto obj = take_bind_obj<obj_b>();
     constexpr auto all_anns = [] {
         std::vector<std::vector<meta::info>> storage{};
-        if (obj != meta::dealias(obj)) storage.push_back(meta::annotations_of(meta::dealias(obj)));
-        storage.push_back(meta::annotations_of(obj));
-        if (obj_b != obj) storage.push_back(meta::annotations_of(obj_b));
+        if (obj != meta::dealias(obj)) storage.push_back(annotations_of_a(meta::dealias(obj)));
+        storage.push_back(annotations_of_a(obj));
+        if constexpr (obj_b != obj) storage.push_back(annotations_of_a(take_bind_anno_obj<obj_b>()));
         return std::define_static_array(std::views::join(storage));
     }();
 
@@ -175,7 +176,7 @@ consteval auto nb_annotations_of() {
         std::define_static_array(all_anns | std::views::filter([](meta::info ann) { return !is_ab_annotation(ann); }));
     return [&]<size_t... I>(std::index_sequence<I...>) {
         return std::tuple([:meta::constant_of(arr[I]):]...);
-    }(std::make_index_sequence<arr.size()>{});
+    }(std::make_index_sequence<arr.size()>{});  // 有将这种提取操作函数化的办法吗?
 }
 
 // 总是同时使用
@@ -183,10 +184,55 @@ template <meta::info obj_b, bool with_src_h>
 consteval auto extral_annotations_of() {
     return std::tuple_cat(nb_annotations_of<obj_b>(), doctuple_of<obj_b, with_src_h>());
 }
+
+// ==================== class-property 注解解析 ====================
+
+template <meta::info cls>
+consteval auto parse_cls_props_annotations() {
+    struct PropInfo {
+        meta::info getter;
+        meta::info setter;
+    };
+    static constexpr auto access_ctx = meta::access_context::current();
+    std::flat_map<std::string_view, PropInfo> props;
+    std::vector<meta::info> bindmems;
+
+    template for (constexpr auto& member : std::define_static_array(meta::members_of(cls, access_ctx))) {
+        if constexpr (detail::is_bindable<member>()) {
+            constexpr auto prop_ann = std::define_static_array(annotations_of_with_type_a(member, ^^property));
+            if constexpr (prop_ann.empty())
+                bindmems.push_back(member);
+            else {
+                constexpr auto func = [] {
+                    if constexpr (is_bind_declaration(member))
+                        return [:member:].obj;
+                    else
+                        return member;
+                }();
+                constexpr auto paramN = meta::parameters_of(func).size();
+                static_assert(paramN <= 1, "property getter/setter must have 0 or 1 parameter");
+                auto is_getter = paramN == 0;
+                auto prop_v = meta::extract<property>(prop_ann[0]);
+                auto& prop = props[prop_v.name];
+                if (is_getter)
+                    props[prop_v.name].getter = member;
+                else {
+                    prop.setter = member;
+                    if (prop_v.datamem != meta::info{} && prop.getter == meta::info{}) prop.getter = prop_v.datamem;
+                }
+            }
+        }
+    }
+    return std::make_pair(std::define_static_array(props | std::views::transform([](const auto& p) {
+                                                       return std::make_pair(p.first.data(), p.second);
+                                                   })),
+                          std::define_static_array(bindmems));
+}
+
 // ==================== 函数注解解析 ====================
 template <meta::info func_b>
 auto parse_func_annotations() {
-    static constexpr auto func = take_bind<func_b>();
+    static constexpr auto func = take_bind_obj<func_b>();
     constexpr auto params = std::define_static_array(meta::parameters_of(func));
     constexpr int paramN = params.size();
     constexpr bool auto_param_name_ = check_anno_bool_value_ex<func_b, auto_param_name, conf::auto_param_name>();
@@ -195,9 +241,10 @@ auto parse_func_annotations() {
     constexpr auto all_args = [] {
         std::vector<meta::info> storage{};
         if constexpr (func != meta::dealias(func))
-            storage.append_range(meta::annotations_of_with_type(meta::dealias(func), ^^arg));
-        storage.append_range(meta::annotations_of_with_type(func, ^^arg));
-        if constexpr (func_b != func) storage.append_range(meta::annotations_of_with_type(func_b, ^^arg));
+            storage.append_range(annotations_of_with_type_a(meta::dealias(func), ^^arg));
+        storage.append_range(annotations_of_with_type_a(func, ^^arg));
+        if constexpr (func_b != func)
+            storage.append_range(annotations_of_with_type_a(take_bind_anno_obj<func_b>(), ^^arg));
         return std::define_static_array(storage);
     }();
 
@@ -209,7 +256,7 @@ auto parse_func_annotations() {
             const auto& p = params[i];
             arg param_arg{i};
             // 检查参数自身的 arg 注解
-            auto param_args = meta::annotations_of_with_type(p, ^^arg);
+            auto param_args = annotations_of_with_type_a(p, ^^arg);
             if (param_args.size() > 0) {
                 param_arg = meta::extract<arg>(param_args[0]);
                 param_arg.ind = i;
@@ -223,7 +270,7 @@ auto parse_func_annotations() {
                 param_arg.name_ = std::define_static_string(s);
             }
             auto anns_p =
-                meta::annotations_of(p) | std::views::transform([](const auto& ann) { return meta::constant_of(ann); });
+                annotations_of_a(p) | std::views::transform([](const auto& ann) { return meta::constant_of(ann); });
             auto simp_default_ =
                 std::ranges ::find_if(anns_p, [](auto ann) { return meta::remove_cvref(meta::type_of(ann)) != ^^arg; });
             if (simp_default_ != anns_p.end()) param_arg.default_ = *simp_default_;
@@ -301,5 +348,4 @@ auto parse_func_annotations() {
     return std::tuple_cat(final_args, doc_tuple);
 }
 }  // namespace detail
-// using namespace nb::literals;
 }  // namespace annobind

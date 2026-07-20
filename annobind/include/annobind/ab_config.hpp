@@ -33,7 +33,9 @@
 #ifndef AB_AUTO_PLAIN_NEST_CLASS
 #define AB_AUTO_PLAIN_NEST_CLASS false
 #endif
-
+#ifndef AB_ATTRS_MAX_N
+#define AB_ATTRS_MAX_N 16
+#endif
 namespace annobind {
 // ============= 自动绑定全局设置 ==============
 namespace conf {
@@ -56,6 +58,9 @@ constexpr bool auto_skip_data = AB_AUTO_SKIP_DATA;
 // 扁平化绑定作用域
 constexpr bool auto_plain_module = AB_AUTO_PLAIN_MODULE;
 constexpr bool auto_plain_nest_class = AB_AUTO_PLAIN_NEST_CLASS;
+
+// annoset
+constexpr unsigned long attrs_max_n = AB_ATTRS_MAX_N;
 
 }  // namespace conf
 }  // namespace annobind
