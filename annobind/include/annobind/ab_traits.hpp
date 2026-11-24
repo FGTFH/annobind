@@ -35,7 +35,12 @@ consteval bool is_static_data_member(meta::info member) {
 consteval bool is_data_member(meta::info member) {
     return is_static_data_member(member) || is_nonstatic_data_member(member);
 }
-
+consteval bool is_lambda(meta::info f) {
+    return meta::is_enumerable_type(f) && meta::display_string_of(f).contains("lambda");
+}
+consteval bool is_non_lambda_enumerable_type(meta::info f) {
+    return meta::is_enumerable_type(f) && !meta::display_string_of(f).contains("lambda");
+}
 // 排除特殊函数 析构/复制构造/移动构造/赋值等
 consteval bool is_bindable_member_function(meta::info member) {
     return meta::is_function(member) && !meta::is_deleted(member) &&

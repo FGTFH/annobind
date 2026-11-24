@@ -30,7 +30,7 @@ auto make_nb_module(nb::module_& nb_mod, const std::string& identifier) {
     static_assert(name[0] != '\0', "name must be specified");
 
     auto nb_mod_new = std::apply([&](const auto&... args) { return nb_mod.def_submodule(name, args...); }, doctuple);
-    ABRegistry::register_module(nb_mod_new, identifier);
+    ABRegistry::instance().register_module(nb_mod_new, identifier);
     return nb_mod_new;
 }
 
@@ -59,7 +59,7 @@ auto make_nb_class(nb::handle& nb_scope) {
 
     auto nb_cls = std::apply([&](const auto&... args) { return cls_t(nb_scope, cls_name, args...); }, extra_annons);
     auto peeled = nb_class_peeled(nb_cls);
-    ABRegistry::register_class(peeled);
+    ABRegistry::instance().register_class(peeled);
     return peeled;
 }
 
@@ -113,7 +113,7 @@ template <meta::info enum_b>
 auto bind_enum(nb::handle& nb_scp) {
     constexpr auto enum_ = detail::take_bind_obj<enum_b>();
     using T = typename[:enum_:];
-    if (auto nb_enum_old = ABRegistry::find_enum<T>()) {
+    if (auto nb_enum_old = ABRegistry::instance().find_enum<T>()) {
         std::println("[annobind warn] enum {} already bound", meta::display_string_of(enum_));
         return *nb_enum_old;
     }
@@ -133,7 +133,7 @@ auto bind_enum(nb::handle& nb_scp) {
     if constexpr (export_values_v) {
         nb_enum.export_values();
     }
-    ABRegistry::register_enum(nb_enum);
+    ABRegistry::instance().register_enum(nb_enum);
     return nb_enum;
 }
 
@@ -330,7 +330,7 @@ template <meta::info cls_b>
 auto bind_class(nb::handle& nb_scope, std::optional<nb::handle&> nb_base) {
     if (!nb_base.has_value()) nb_base = nb_scope;
     constexpr auto cls = detail::take_bind_obj<cls_b>();
-    if (auto nb_cls_old = ABRegistry::find_class<typename[:cls:]>()) {
+    if (auto nb_cls_old = ABRegistry::instance().find_class<typename[:cls:]>()) {
         std::println("[annobind warn] class {} already bound", meta::display_string_of(meta::dealias(cls)));
         return *nb_cls_old;
     }
@@ -352,7 +352,7 @@ auto bind_submodule(nb::module_& nb_mod, std::optional<nb::module_&> nb_base) {
     if (!nb_base.has_value()) nb_base = nb_mod;
     std::string identifier = nb::cast<std::string>(nb_mod.attr("__name__")) + '.' + detail::name_of<ns_b>();
 
-    if (auto nb_mod_old = ABRegistry::find_module(identifier)) {
+    if (auto nb_mod_old = ABRegistry::instance().find_module(identifier)) {
         // 这里按ns_b进行区分, 而class则是按底层类型
         std::println("[annobind warn] submodule {}(from {}) already bound", identifier, meta::display_string_of(ns_b));
         return *nb_mod_old;

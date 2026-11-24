@@ -184,7 +184,8 @@ static constexpr auto n1 = ab::bind<^^recursive1>{};
 
 NB_MODULE(PROJECT_NAME, m) {
     // 启用重复注册检查与警告(RAII模式), 建议在调试阶段启用
-    annobind::reg_guard rg;
+    annobind::reg_guard _reg_guard;
+    auto reg = annobind::ABRegistry::instance();
     // 根据注解, 绑定整个命名空间 test 到模块 m
     auto test_mod = annobind::bind_to_module<^^test>(m);
     // 手动绑定
@@ -193,7 +194,7 @@ NB_MODULE(PROJECT_NAME, m) {
 
     // -绑定类成员
     // --查找类的绑定实例(需要开启reg_guard)
-    auto inner_cls_p = annobind::ABRegistry::find_class<test::inner::IInnerClass>();
+    auto inner_cls_p = reg.find_class<test::inner::IInnerClass>();
     // --进行绑定
     if (inner_cls_p) {
         auto inner_cls = *inner_cls_p;
@@ -203,8 +204,16 @@ NB_MODULE(PROJECT_NAME, m) {
         //  annobind::bind_class_member<^^test::inner::IInnerClass::i2>(inner_cls);
 
         auto f = [](test::inner::IInnerClass& self, int a) { return a; };
-        // 可以直接使用nb接口绑定函数. 请注意, 由于无法获取lambda函数本身数的反射(而不是函数指针), 无法使用ab绑定
+        // 可以直接使用nb接口绑定函数.
         inner_cls.def("f", f);
+        // decltype(f2) 是lambda匿名类, 会被当作普通类来处理(即将其绑定为嵌套类), 注意:
+        // 0. 得到的是(嵌套)类而非(成员)函数
+        // 1. 必须显式提供名称(通过 直接bind声明 / rename)
+        // 2. 作用域须额外指定
+        // 3. 其成员(包括operator())对外不可见, 将得到空类
+        // 4. 使annobind能够转发lambda绑定虽然技术上可行, 但对于这种零散的绑定, 用户代码量相比nanobind并不会减少
+        static constexpr auto lambda_class = ab::bind<^^decltype(f)>{};                      // 1.
+        annobind::bind_class_member<^^lambda_class, ^^test::inner::IInnerClass>(inner_cls);  // 2. 3. 4.
     }
     //  手动绑定默认会忽略skip注解. 注意plain注解仍生效了,没有创建新的子模块, 且mainLevelFunc2在主模块中
     annobind::bind_module_member<^^test::inner3>(m, m);

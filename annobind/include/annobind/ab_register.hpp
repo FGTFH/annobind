@@ -21,31 +21,31 @@ class ABRegistry {
 
     template <typename T, typename... Ts>
         requires(!std::is_enum_v<T>)
-    static void register_class(const nb::class_<T, Ts...>& cls) {
-        if (!instance().enabled_) return;
-        auto& map_ = instance().cmap_;
+    void register_class(const nb::class_<T, Ts...>& cls) {
+        if (!enabled_) return;
+        auto& map_ = cmap_;
         map_[std::type_index(typeid(T))] = nb_class_peeled(cls);
     }
 
     template <typename T>
         requires(std::is_enum_v<T>)
-    static void register_enum(const nb::enum_<T>& enm) {
-        if (!instance().enabled_) return;
-        auto& map_ = instance().cmap_;
+    void register_enum(const nb::enum_<T>& enm) {
+        if (!enabled_) return;
+        auto& map_ = cmap_;
         map_[std::type_index(typeid(T))] = enm;
     }
 
-    static void register_module(const nb::module_& m, const std::string& name) {
-        if (!instance().enabled_) return;
-        auto& map_ = instance().mmap_;
+    void register_module(const nb::module_& m, const std::string& name) {
+        if (!enabled_) return;
+        auto& map_ = mmap_;
         map_.insert(std::make_pair(name, m));
     }
 
     template <typename T>
         requires(!std::is_enum_v<T>)
-    static nb::class_<T>* find_class() {
-        if (!instance().enabled_) return nullptr;
-        auto& map_ = instance().cmap_;
+    nb::class_<T>* find_class() {
+        if (!enabled_) return nullptr;
+        auto& map_ = cmap_;
         auto it = map_.find(std::type_index(typeid(T)));
         if (it != map_.end()) {
             return std::any_cast<nb::class_<T>>(&it->second);
@@ -55,9 +55,9 @@ class ABRegistry {
 
     template <typename T>
         requires(std::is_enum_v<T>)
-    static nb::enum_<T>* find_enum() {
-        if (!instance().enabled_) return nullptr;
-        auto& map_ = instance().cmap_;
+    nb::enum_<T>* find_enum() {
+        if (!enabled_) return nullptr;
+        auto& map_ = cmap_;
         auto it = map_.find(std::type_index(typeid(T)));
         if (it != map_.end()) {
             return std::any_cast<nb::enum_<T>>(&it->second);
@@ -65,9 +65,9 @@ class ABRegistry {
         return nullptr;
     }
 
-    static nb::module_* find_module(const std::string& name) {
-        if (!instance().enabled_) return nullptr;
-        auto& map_ = instance().mmap_;
+    nb::module_* find_module(const std::string& name) {
+        if (!enabled_) return nullptr;
+        auto& map_ = mmap_;
         auto it = map_.find(name);
         if (it != map_.end()) {
             return &it->second;
@@ -76,23 +76,23 @@ class ABRegistry {
     }
 
     template <typename T>
-    static bool registered() {
-        if (!instance().enabled_) return false;
-        auto& map_ = instance().cmap_;
+    bool registered() {
+        if (!enabled_) return false;
+        auto& map_ = cmap_;
         return map_.find(std::type_index(typeid(T))) != map_.end();
     }
 
-    static bool registered(const std::string& name) {
-        if (!instance().enabled_) return false;
-        auto& map_ = instance().mmap_;
+    bool registered(const std::string& name) {
+        if (!enabled_) return false;
+        auto& map_ = mmap_;
         return map_.find(name) != map_.end();
     }
-    static void enable() { instance().enabled_ = true; }
+    void enable() { enabled_ = true; }
 
-    static void disable() {
-        instance().enabled_ = false;
-        instance().cmap_.clear();
-        instance().mmap_.clear();
+    void disable() {
+        enabled_ = false;
+        cmap_.clear();
+        mmap_.clear();
     }
 
    private:

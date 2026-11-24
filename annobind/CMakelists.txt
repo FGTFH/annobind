@@ -1,6 +1,6 @@
-project(annobind)
-
 add_library(annobind INTERFACE)
-target_include_directories(annobind INTERFACE
-    include
+target_sources(annobind INTERFACE
+    FILE_SET HEADERS
+    BASE_DIRS include
+    FILES include/annobind/annobind.hpp
 )
